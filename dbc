@@ -1,0 +1,35 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Created by JetBrains PhpStorm.
+ * User: georgroesch
+ * Date: 04.09.12
+ * Time: 21:30
+ */
+
+if (!defined('DBC_EXECUTION_MODE')) {
+	define('DBC_EXECUTION_MODE','cli');
+}
+
+$args = $argv;
+array_shift($args); //get rid of script name
+$command = array_shift($args);
+
+$_REQUEST = array('action' => $command, 'cli_args' => $args);
+
+include(dirname(__FILE__).'/api.php');
+
+if ($return['status']!='ok') {
+	echo $return['message'].PHP_EOL;
+	exit(1);
+}
+
+switch (strtolower(gettype($return['data']))) {
+	case 'array':
+	case 'object':
+		print_r($return['data']);
+		break;
+	default:
+		echo $return['data'].PHP_EOL;
+}
+exit(0);

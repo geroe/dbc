@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>DbChanges</title>
+		<!-- Bootstrap -->
+		<link href="lib/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+		<style>
+			.done, .done>a {
+				font-style: italic;
+				text-decoration: line-through;
+				color: gray;
+			}
+
+			.tight {
+				margin-bottom: 10px;
+			}
+
+			.hidden {
+				display: none;
+			}
+
+			.timestamp {
+				color: #a9a9a9;
+				font-style: italic;
+				font-size: 10px;
+				line-height: 12px;
+				margin: 0 0 5px 0;
+			}
+
+			.input-premium {
+				height: 30px !important;
+				font-size: 150% !important;
+				font-weight: bold;
+			}
+
+			.patch-list a:visited {
+				text-decoration: line-through !important;
+			}
+
+			.patch-executor {
+				border: 1px solid #ccc;
+				width: 100%;
+				height: 200px;
+			}
+
+			.sql-error {
+				margin: 5px 0 5px 0;
+				font-size: 12px;
+			}
+		</style>
+		<script>
+			var executionStack = [];
+			var executionCount = 0;
+			var patchList = [];
+
+			showPanel = function(id) {
+				$("#"+id).removeClass('hidden');
+			}
+
+			hidePanel = function(id) {
+				$("#"+id).addClass('hidden');
+			}
+
+			toggleAllCheckboxes = function(state) {
+				$('#listPanel :checkbox:not(:disabled)').each(function () {
+					this.checked = state;
+				});
+			}
+
+			updateOpenCountBadge = function() {
+				var count = $("#listTable>tbody tr").size();
+				var badge = $("span#openCountBadge");
+
+				badge.text(count);
+				if (count==0) {
+					badge.addClass('hidden');
+				} else {
+					badge.removeClass('hidden');
+				}
+			}
+
+			nav = function(active) {
+				$("#listPanel").addClass("hidden");
+				$("#loadingList").removeClass("hidden");
+				$(".search-query").val("");
+				var lookupId = 'nav'+active.charAt(0).toUpperCase() + active.slice(1);
+				$("#topNav li").each(function() {
+					if ($(this).attr("id")==lookupId) {
+						$(this).addClass("active");
+					} else {
+						$(this).removeClass("active");
+					}
+				});
+				refreshNavList(active);
+			}
+
+			refreshNavList = function(type) {
+				$.getJSON(
+						"api.php",
+						{action: "list"+type.charAt(0).toUpperCase()+type.slice(1)},
+						function(json) {
+							refreshList(json);
+							if (type=="open") {
+								updateOpenCountBadge();
+							}
+						}
+				);
+			}
+
+			refreshList = function(json) {
+				if (json.status!='ok') {
+					alert(json.message);
+				} else {
+					var listBody = $("#listTable>tbody");
+					listBody.empty();
+					$(json.data).each(function () {
+						listBody.append(getListRow(this));
+					});
+				}
+				$("#loadingList").addClass("hidden");
+				$("#listPanel").removeClass("hidden");
+			}
+
+			getListRow = function(item) {
+				var row = $(document.createElement("tr"));
+				row.append($(document.createElement("td")).append(
+						"<input type='checkbox' value='"+item.file+"'"+(!item.executable ? " disabled" : "")+">"
+				));
+				row.append($(document.createElement("td")).append(
+						"<a href='#' onclick='getDetails(\""+item.file+"\");'>"+item.file+"</a>"
+						+(item.db!="standard" ? " "+getBadge(item.db) : "")
+				));
+				row.append($(document.createElement("td")).text(
+						item.since
+				));
+				row.append($(document.createElement("td")).text(
+						item.author
+				));
+
+				if (item.isExecuted) {
+					$(row).children().addClass("done");
+				}
+
+				var tags = $(document.createElement("td"));
+				if (item.slow) {
+					$(tags).append(getTag('tag-slow',!item.isExecuted));
+				}
+				if (item.super) {
+					$(tags).append(getTag('tag-super',!item.isExecuted));
+				}
+				if (item.execute>0) {
+					$(tags).append(getTag('tag-execute',!item.isExecuted));
+				}
+				if (item.message) {
+					$(tags).append(getTag('tag-message',!item.isExecuted));
+				}
+
+				row.append($(tags));
+				return row;
+			}
+
+			getTag = function(type,colored) {
+				switch(type) {
+					case 'tag-slow':
+						return getBadge('icon-time',(colored ? 'important' : ''));
+						break;
+					case 'tag-super':
+						return getBadge('icon-fire',(colored ? 'inverse' : ''));
+						break;
+					case 'tag-execute':
+						return getBadge('icon-play',(colored ? 'warning' : ''));
+						break;
+					case 'tag-message':
+						return getBadge('icon-info-sign',(colored ? 'info' : ''));
+						break;
+					case 'tag-patch':
+						return getBadge('icon-play',"warning");
+						break;
+					case 'tag-success':
+						return getBadge('icon-thumbs-up',"success");
+						break;
+					case 'tag-error':
+						return getBadge('icon-thumbs-down',"important");
+						break;
+					case 'tag-active':
+						return getBadge('icon-hand-right',"");
+						break;
+					case 'tag-add':
+						return getBadge('icon-add',"");
+						break;
+					default:
+						return getBadge(type,"");
+						break;
+				}
+			}
+
+			getBadge = function(content,color) {
+				var out = '<span class="badge'+(color ? ' badge-'+color : '')+'">';
+				if (content.substr(0,5)=='icon-') {
+					out+='<i class="'+content+' icon-white"></i>';
+				} else {
+					out+=content;
+				}
+				out += '</span> ';
+
+				return out;
+			}
+
+			getDetails = function(change) {
+                hidePanel("logPanel");
+                hidePanel("detailsAddPanel");
+				showPanel("detailsPanel");
+				hidePanel("changeDetails");
+				showPanel("loadingDetails");
+
+				$.getJSON(
+						"api.php",{
+							action: "getDetails",
+							file: change
+						},
+						function(json) {
+							if (json.status!='ok') {
+								alert(json.message);
+							} else {
+								var elem = $("#detailsDb");
+								if (json.data.db!="standard") {
+									$(elem).empty().append(getBadge(json.data.db));
+									$(elem).removeClass("hidden");
+								} else {
+									$(elem).addClass("hidden");
+								}
+								elem = $("#changeDetails>h3");
+								$(elem).empty().append("<a href='changes/"+json.data.file+"' target='_blank'"+(json.data.isExecuted ? ' class="done"' : "")+">"+json.data.file+"</a>");
+								$(elem).append(document.createElement("small"));
+								elem = $("#changeDetails>h3 small")
+								$(elem).html(" &mdash; "+json.data.author+" @ "+json.data.since);
+								if (json.data.super) {
+									$(elem).prepend(getTag('tag-super',true));
+								}
+								if (json.data.slow) {
+									$(elem).prepend(getTag('tag-slow',true));
+								}if (json.data.super || json.data.slow) {
+									$(elem).prepend(" ");
+								}
+
+								$("#changeDetails div.alert-info").remove();
+
+								elem = $("#changeDetails>h3");
+								if (json.data.message) {
+									var msg = document.createElement("div");
+									$(msg).addClass("alert").addClass("alert-info").html(getTag("tag-message",true)+" "+json.data.message);
+									$(elem).after(msg);
+								}
+
+								if (!json.data.isExecuted && !json.data.executable) {
+									$("#changeDetails div.alert-danger button").each(function() {
+										$(this).removeClass("hidden");
+										this.onclick=function() {
+											markAsExecuted(change,this);
+										}
+									});
+									$("#changeDetails div.alert-danger").removeClass("hidden");
+								} else {
+									$("#changeDetails div.alert-danger").addClass("hidden");
+								}
+
+								elem = $("#changeDetails ul")
+								elem.empty();
+								$(json.data.execute).each(function() {
+									elem.append("<li>"+getTag("tag-execute",true)+" <a href='"+this+"' target='_blank'>"+this+"</a></li>");
+								});
+
+								$("#changeDetails pre").text(json.data.sql);
+								showPanel("changeDetails");
+							}
+							hidePanel("loadingDetails");
+						}
+				);
+			}
+
+			executeList = function() {
+				hidePanel("detailsPanel");
+				showPanel("logPanel");
+
+				var changes = $("#listTable>tbody :checkbox:checked");
+				executionCount = changes.size(); //reset
+				if (executionCount==0) {
+					alert("No changes selected!");
+					return;
+				}
+
+				executionStack = []; //reset
+				patchList = []; //reset
+				changes.each(function() {
+					executionStack.push($(this).attr("value"));
+				});
+
+				if (executionStack.length) {
+					$("#loadingLogBar").width("0%").text("");
+					showPanel("loadingLog");
+					executeNext();
+				}
+			}
+
+			executeNext = function() {
+				if (executionStack.length) {
+					executeSql(executionStack.pop());
+				} else {
+					hidePanel("loadingLog");
+				}
+			}
+
+			executeSql = function(change) {
+				$("#loadingLogBar")
+					.width(parseInt(((executionCount-executionStack.length)/executionCount)*100)+"%")
+					.text(change);
+				addLog("logList","active","<a href='#' onclick='getDetails(\""+change+"\");'>"+change+"</a>");
+				$.getJSON(
+					"api.php",{
+						action: "executeSql",
+						file: change
+					},
+					function(json) {
+						window.setTimeout(function(){checkExecuteSqlResult(change);},1000);
+					}
+				);
+			}
+
+			checkExecuteSqlResult = function(change) {
+				$.getJSON(
+					"api.php",{
+						action: "getAsyncStatus",
+						file: change
+					},
+					function(json) {
+						if (json.status=='ok') {
+							setExecuteSqlResult(json.data.status,change,json.data.message);
+						}
+					}
+				);
+			}
+
+			setExecuteSqlResult = function(status,change,message) {
+				switch (status) {
+					case 'UNKNOWN':
+					case 'LOCK':
+						window.setTimeout(function(){checkExecuteSqlResult(change);},1000);
+						return;
+						break;
+
+					case 'DONE':
+						addLog("logList","success","<a href='#' onclick='getDetails(\""+change+"\");'>"+change+"</a>");
+						$.getJSON(
+								"api.php",{
+									action: "getDetails",
+									file: change
+								},
+								function(json) {
+									if (json.status=='ok') {
+										if (json.data.execute.length) {
+											executePatch(change,json.data.execute);
+											return;
+										}
+									}
+									executeNext();
+								}
+						);
+						break;
+
+					case 'FAIL':
+						addLog("logList","error","<a href='#' onclick='getDetails(\""+change+"\");'>"+change+"</a> "
+								+"failed<pre class='sql-error'>"+message+"</pre>"
+								+"<div style=\"text-align: right\">"
+								+"<button class=\"btn btn-mini\" onclick=\"failedToExecuted('"+change+"',this);\"><i class=\"icon-thumbs-up\"></i> Mark as executed</button>"
+								+"</div>"
+						);
+						hidePanel("loadingLog");
+						break;
+
+					default:
+						addLog("logList","error","<a href='#' onlick='getDetails(\""+change+"\");'></a>"+change+"</a> :: "+json.data.status+" :: "+json.data.message);
+						hidePanel("loadingLog");
+						break;
+				}
+			}
+
+			failedToExecuted = function(change,btn) {
+				markAsExecuted(change,btn,'failedToExecuted');
+			}
+
+			markAsExecuted = function(change,btn,action) {
+				action = (action ? action : "markAsExecuted");
+				$(btn).addClass("hidden");
+				$.getJSON(
+						"api.php",{
+							action: action,
+							file: change
+						},
+						function(json) {
+							if (json.status=='ok') {
+								setExecuteSqlResult(json.data.status,change);
+								if (action=='markAsExecuted') {
+									getDetails(change);
+								}
+								nav("open"); //refresh view
+							}
+						}
+				);
+			}
+
+			executePatch = function(change,patches) {
+				$("#patchList").empty();
+				$("#executeFilename").text(change);
+
+				patchList = patches;
+				$(patches).each(function() {
+					$("#patchList").append("<li><a href='"+this+"' target='patchExecutorWin'>"+this+"</a></li>")
+				});
+
+				$("#patchExecutor iframe").each(function() {
+					this.src="about:blank";
+				})
+
+				$("#patchExecutor").modal({
+					keyboad: false,
+					show: true,
+					backdrop: 'static'
+				}).css({
+					'width': function () {
+						return ($(document).width() * .9) + 'px';
+					},
+					'margin-left': function () {
+						return -($(this).width() / 2);
+					}
+				});
+			}
+
+			executePatchDone = function() {
+				var change = $("#executeFilename").text();
+				$(patchList).each(function() {
+					//addLog("logList","patch",this);
+					addLog("logList","patch",this+" of <a href='#' onclick='getDetails(\""+change+"\");'>"+change+"</a>");
+				});
+				patchList = []; //reset
+				$("#executeFilename").empty(); //reset
+				nav("open"); //refresh view
+				executeNext();
+			}
+
+			addLog = function(container,type,content) {
+				var log = $(document.createElement("div"))
+					.addClass('alert')
+					.addClass('tight')
+					.html(getTag("tag-"+type,false)+" "+content);
+
+				switch(type) {
+					case "success":
+						log.addClass("alert-success");
+						break;
+					case "error":
+						log.addClass("alert-error");
+						break;
+				}
+
+				var timestamp = $(document.createElement("p"))
+					.addClass("timestamp")
+					.text(formatDate());
+
+				log.prepend(timestamp);
+
+				$("#"+container).prepend(log);
+			}
+
+			formatDate = function(d) {
+				if (typeof(d)!="Date") {
+					d = new Date();
+				}
+
+				var out = "";
+				out += d.getFullYear()
+						+"-"+("0"+(d.getMonth()+1)).slice(-2)
+						+"-"+ ("0"+d.getDate()).slice(-2);
+				out += " "+ ("0"+d.getHours()).slice(-2)
+						+":"+("0"+d.getMinutes()).slice(-2)
+						+":"+ ("0"+d.getSeconds()).slice(-2);
+
+				return out;
+			}
+
+		searchIssue = function() {
+			$(".navbar-inner .nav li").removeClass("active");
+			$("#listPanel").addClass("hidden");
+			$("#loadingList").removeClass("hidden");
+			$.getJSON(
+				"api.php",{
+					action: "searchByIssue",
+					query: $(".search-query").val()
+				},
+				function(json) {
+					refreshList(json);
+				}
+			);
+
+			return false;
+		}
+
+		getAddForm = function() {
+			hidePanel('detailsPanel');
+			hidePanel('logPanel');
+			showPanel('detailsAddPanel');
+			while($("#detailsAddPanel form input[name=execute]").size()>1) {
+				$("#detailsAddPanel form input[name=execute]").last().parent().remove();
+			}
+			$("#detailsAddPanel form").each(function() {
+				this.reset();
+			});
+            $('#addSince').val(formatDate());
+			$('#addIssueNumber').focus();
+
+            $.getJSON(
+                "api.php",{
+                    action: "getDefaultAuthor"
+                },
+                function(json) {
+                    $("#addAuthor").val(json.data);
+                }
+            );
+		}
+
+        addChange = function() {
+            $("#loadingList").removeClass("hidden");
+            $.post(
+                'api.php',{
+                    action: 'addChange',
+                    data: $("#detailsAddPanel form").serializeObject()
+                },
+                function(json) {
+                    if (json.status=='ok') {
+                        getAddForm();
+                        nav('open');
+                    } else {
+                        alert(json.message);
+                    }
+                    $("#loadingList").addClass("hidden");
+                }
+            );
+        }
+		</script>
+	</head>
+	<body>
+		<script src="lib/jquery-1.8.1.min.js"></script>
+		<script src="lib/bootstrap/js/bootstrap.min.js"></script>
+        <script>
+            $.fn.serializeObject = function()
+            {
+                var o = {};
+                var a = this.serializeArray();
+                $.each(a, function() {
+                    if (o[this.name] !== undefined) {
+                        if (!o[this.name].push) {
+                            o[this.name] = [o[this.name]];
+                        }
+                        o[this.name].push(this.value || '');
+                    } else {
+                        o[this.name] = this.value || '';
+                    }
+                });
+                return o;
+            };
+        </script>
+		<div id="patchExecutor" class="modal hide fade">
+			<div class="modal-header">
+				<h3>Execute <span id="executeFilename"></span></h3>
+			</div>
+			<div class="modal-body">
+				<ul id="patchList" class="patch-list">
+				</ul>
+				<div class="well well-small tight">
+					<strong>Output:</strong>
+					<iframe id="patchExecutorWin" name="patchExecutorWin" class="patch-executor"></iframe>
+				</div>
+				<div class="alert alert-warning"><strong>Attention!</strong> Be sure to to execute all entries before clicking &quot;Continue&quot;.</div>
+			</div>
+			<div class="modal-footer">
+				<a href="#" onclick="executePatchDone();" data-dismiss="modal" class="btn btn-primary">Continue</a>
+			</div>
+		</div>
+		<div id="topNav" class="navbar navbar-fixed-top">
+			<div class="navbar-inner" style="padding-left: 20px; padding-right: 20px">
+				<div class="brand">DbChanges</div>
+				<ul class="nav">
+					<li id="navOpen" class="active"><a href="#" onclick="nav('open');">Open <span id="openCountBadge" class="badge badge-important hidden"></span></a></li>
+					<li id="navDone"><a href="#" onclick="nav('done');">Done</a></li>
+					<li id="navAll"><a href="#" onclick="nav('all');">All</a></li>
+				</ul>
+				<form class="navbar-search pull-right" onsubmit="searchIssue(this); return false;">
+					<input type="text" class="search-query" placeholder="Issue #" />
+				</form>
+				<ul class="nav pull-right">
+					<li id="navAdd"><a href="#" onclick="getAddForm();">Add</a></li>
+				</ul>
+			</div>
+		</div>
+		<br/>
+		<div class="container-fluid" style="padding-top: 40px">
+			<div class="row-fluid">
+				<div class="span7">
+					<div id="loadingList" class="container hidden">
+						<div class="row">
+							<div class="span8 offset2">
+								<div class="progress progress-striped active" style="width: 50%;">
+									<div class="bar" style="width: 100%;">Updating...</div>
+								</div>
+							</div>
+						</div>
+					</div>
+					<div id="listPanel">
+						<button class="btn btn-primary" onclick="executeList();"><i class="icon-play icon-white"></i></button>
+						<table id="listTable" class="table table-hover">
+							<thead>
+								<tr>
+									<th><input type="checkbox" onclick="toggleAllCheckboxes(this.checked);" /></th>
+									<th>Change</th>
+									<th><i class="icon-arrow-up"></i> Date</th>
+									<th>Author</th>
+									<th>Info</th>
+								</tr>
+							</thead>
+							<tbody>
+							</tbody>
+						</table>
+					</div>
+				</div>
+				<div class="span5">
+					<div id="logPanel">
+						<ul class="nav nav-pills">
+							<li class="active"><a href="#">Log</a></li>
+							<li><a href="#" onclick="hidePanel('logPanel'); showPanel('detailsPanel');">Details</a></li>
+						</ul>
+						<div id="loadingLog" class="progress progress-striped active hidden">
+							<div id="loadingLogBar" class="bar" style="width: 0%;"></div>
+						</div>
+						<div id="logList">
+						</div>
+					</div>
+					<div id="detailsPanel" class="hidden">
+						<ul class="nav nav-pills">
+							<li><a href="#" onclick="hidePanel('detailsPanel'); showPanel('logPanel');">Log</a></li>
+							<li class="active"><a href="#">Details</a></li>
+						</ul>
+						<div id="loadingDetails" class="progress progress-striped active hidden">
+							<div class="bar" style="width: 100%;">Updating...</div>
+						</div>
+						<div id="changeDetails" class="hidden">
+							<div id="detailsDb" class="hidden"></div>
+							<h3></h3>
+							<div class="alert alert-danger hidden">
+								This change is not executable using this tool. Please do it manually and then mark it as executed.
+								<div style="text-align: right;">
+									<button class="btn btn-mini"><i class="icon-thumbs-up"></i> Mark as executed</button>
+								</div>
+							</div>
+							<ul class="unstyled">
+							</ul>
+							<pre></pre>
+						</div>
+
+					</div>
+					<div id="detailsAddPanel" class="hidden">
+						<ul class="nav nav-pills">
+							<li><a href="#" onclick="hidePanel('detailsAddPanel'); showPanel('logPanel');">Log</a></li>
+							<li class="active"><a href="#">Details</a></li>
+						</ul>
+						<form onsubmit="return false;">
+                            <div class="control-group error">
+							    <input type="text" class="input-premium important" id="addIssueNumber" name="issue_number" placeholder="Issue #" />
+                            </div>
+                            <div class="control-group error">
+							    <input type="text" name="issue_count" placeholder="Issue Count" value="1" />
+                            </div>
+                            <div class="control-group error">
+							    <input type="text" id="addAuthor" name="author" placeholder="Author" />
+                            </div>
+                            <div class="control-group error">
+                                <div class="input-append">
+                                    <input type="text" id="addSince" name="since" placeholder="Since" value="" />
+                                    <button class="btn" type="button" onclick="$('#addSince').val(formatDate());">
+                                        <i class="icon-time"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <input type="text" id="addDatabase" name="db" placeholder="Database" value="standard" /><br/>
+							<input type="text" name="message" placeholder="Message" /><br/>
+							<label class="checkbox"><input type="checkbox" name="slow" value="1" /> slow</label>
+                            <label class="checkbox"><input type="checkbox" name="super" value="1" /> super</label>
+                            <label class="checkbox"><input type="checkbox" name="executed" value="1" /> executed locally</label>
+							<div class="input-append">
+								<input type="text" name="execute" placeholder="/file/to/execute?do=1" value="" />
+								<button class="btn" type="button" onclick="$(this).parent().after($(this).parent().clone());">+</button>
+							</div>
+							<textarea name="sql" rows="5" placeholder="SQL" style="width: 100%"></textarea><br/>
+							<button type="btn" class="btn btn-primary" onclick="addChange();">Save</button>
+							<button class="btn" onclick="getAddForm();">Reset</button>
+						</form>
+					</div>
+				</div>
+			</div>
+		</div>
+		<script>
+			nav('open');
+		</script>
+	</body>
+</html>
